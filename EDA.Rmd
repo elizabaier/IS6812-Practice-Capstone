@@ -1,0 +1,387 @@
+---
+title: "Home Credit EDA"
+author: Eliza Baier
+date: "2025-02-15"
+output:
+  html_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+getwd()
+```
+
+## Business Problem Summary
+
+Unbanked individuals struggle to get loans from trustworthy lenders which prevents them from owning property and establishing credit history. To properly serve this population, Home Credit needs to be able to predict their potential clients’ risk of defaulting. Accurately predicting the risk associated with each client will allow Home Credit to effectively serve an underserved population while increasing revenue and minimizing risk. 
+
+## Analytical Problem Summary
+
+The analytical challenge with this project is to take a highly-dimensional dataset and create a model that is not biased against the target underserved populations. To do this, it will be important to use a combination of the provided credit scores and transactional data for those who do not have a credit score. To decrease the dimensionality of the dataset, it will be important to eliminate some of the columns and clean the data so that the remaining columns are an accurate representation of the sample.
+
+## EDA Approach to the Business Problem
+
+This notebook contains the exploratory data analysis (EDA) for the provided data. This EDA aims to understand the scope of the data and discover the potential predictability power for each of the variables in the data set. To do this, I first loaded and examined the training data set, split the training data into train and validation folds to aid in my elimination approach to potential predictor variables, examined missing data, eliminated columns with \>50% missing data, created factors and reexamined the data to understand variability and outliers. Then, I eliminated columns with little to no variability and columns that did not seem to have predictive power with respect to the target variable. Then, I further processed the missing and outlier data in several of the remaining columns. After cleaning and eliminating columns, I examined the majority class prediction model to understand the benchmark for effective models moving forward. Finally, I created graphical representations of 7 of the columns I thought might be important predictors for future modeling and found 5 seemingly important potential predictor variables. In the future, transactional data should be aggregated and joined to the database to add additional predictors for those that do not have a credit history as included in the EXT_SOURCE_1 \~ EXT_SOURCE_3 columns.
+
+## Questions to Address
+
+-   What is the structure of the data? How many variables and how many observations?
+-   Which variables are useful and which ones will only add unnecessary complexity to the model?
+-   What variables would be good to remove given how highly dimensional the data is?
+-   What are future steps I can take to further understand the data (especially the transactional data)?
+-   How should I deal with missing data?
+-   How should I deal with rows that have very low variability?
+-   What variables should I bin or impute to increase their usability?
+-   How can I aggregate the transactional data to be a good surrogate for a credit score?
+-   What next steps can I take to understand which variables are the best predictors?
+-   How can I create a model that isn't biased that also served the intended population of Home Credit?
+
+## Load & Examine Data
+
+```{r}
+train <- read.csv("application_train.csv")
+# head(train)
+# glimpse(train)
+```
+
+The training data set is composed of 307,511 observations and 122 variables. Of these 122 variables, one is the target variable - a binary variable indicating payment difficulties, and one is the ID variable which cannot be used for prediction. This leaves 120 potential predictor variables to be used in our model.
+
+## Split Train into Training & Validation Folds
+
+```{r}
+#Randomly sample 70% of the rows in an object called index
+set.seed(124)
+index <- sample(x = 1:nrow(train), size = nrow(train)*.7, replace = F)
+
+#Subset train using index to create a 70% train_fold
+train_fold <- train[index, ]
+
+#Subset train using index to create a 30% validation fold
+validation_fold <- train[-index, ]
+```
+
+## Examine Missing Data
+
+Many of the columns had a high percentage of missing data and in fact, 36 of the columns had >50% missing data. Of the remaining columns, some had a high percentage of NAs but the main problem with many of them was the lack of variability that will be discussed below. To deal with the high percentage of NAs and to decrease dimensionality in the dataset, I chose to eliminate most of the columns with a majority (>50%) missing data. A couple of columns, like the OWN_CAR_AGE column, were not eliminated because the missing values provided additional meaning within the column (see below).
+
+```{r}
+# Define helper functions
+count_missings <- function(x) sum(is.na(x))
+percent_missings <- function(x) mean(is.na(x)) * 100 
+
+# Create sorted missing values table using predefined functions
+missing_table <- train |> 
+  summarize(across(everything(), 
+                   list(count_missings = count_missings, 
+                        percent_missings = percent_missings))) |> 
+  pivot_longer(cols = everything(), 
+               names_to = c("Variable", "Metric"), 
+               names_pattern = "(.+)_(count_missings|percent_missings)") |> 
+  pivot_wider(names_from = Metric, values_from = value) |> 
+  mutate(percent_missings = round(percent_missings, 2)) |>
+  arrange(desc(percent_missings)) 
+
+# Print table
+print(missing_table)
+```
+
+## Eliminate Columns with \>50% Missing Data
+
+This dataset is highly dimensional and as a result, I needed to reduce the dimensionality in the database. The first way I did this was by eliminating each column with a majority of missing data. These columns do not have enough observations to show a pattern as the majority of the data is missing in the column. This allowed me to decrease the dataset from 120 non-target potential predictor variables to 84 potential predictor variables. The following is a list of the variables that I eliminated in this step: COMMONAREA_AVG, COMMONAREA_MODE, COMMONAREA_MEDI, NONLIVINGAPARTMENTS_AVG, NONLIVINGAPARTMENTS_MODE, NONLIVINGAPARTMENTS_MEDI, LIVINGAPARTMENTS_AVG, LIVINGAPARTMENTS_MODE, LIVINGAPARTMENTS_MEDI, FLOORSMIN_AVG, FLOORSMIN_MODE, FLOORSMIN_MEDI, YEARS_BUILD_AVG, YEARS_BUILD_MODE, YEARS_BUILD_MEDI, LANDAREA_AVG, LANDAREA_MODE, LANDAREA_MEDI, BASEMENTAREA_AVG, BASEMENTAREA_MODE, BASEMENTAREA_MEDI, NONLIVINGAREA_AVG, NONLIVINGAREA_MODE, NONLIVINGAREA_MEDI, ELEVATORS_AVG, ELEVATORS_MODE, ELEVATORS_MEDI, APARTMENTS_AVG, APARTMENTS_MODE, APARTMENTS_MEDI, ENTRANCES_AVG, ENTRANCES_MODE, ENTRANCES_MEDI, LIVINGAREA_AVG, LIVINGAREA_MODE, and LIVINGAREA_MEDI.
+
+The only variables that I didn't eliminate that fit this criteria were the OWN_CAR_AGE variable because the NAs meant that the person did not own a car and the EXT_SOURCE_1 because that variable contained information about credit score from an external source. I later binned the OWN_CAR_AGE variable to simplify and create a more inclusive and descriptive variable.
+
+```{r}
+# Count the number of variables with percent_missing >50%
+missing_table |>
+  filter(percent_missings > 50.00) |> # Check for missing variables with >50% missing values
+  count()  # Count the number of variables
+
+# Remove variables with >50% missing from the train fold
+train_fold_update_1 <- train_fold |>
+  select(-c(COMMONAREA_AVG, COMMONAREA_MODE, COMMONAREA_MEDI, NONLIVINGAPARTMENTS_AVG, NONLIVINGAPARTMENTS_MODE, NONLIVINGAPARTMENTS_MEDI, LIVINGAPARTMENTS_AVG, LIVINGAPARTMENTS_MODE, LIVINGAPARTMENTS_MEDI, FLOORSMIN_AVG, FLOORSMIN_MODE, FLOORSMIN_MEDI, YEARS_BUILD_AVG, YEARS_BUILD_MODE, YEARS_BUILD_MEDI, LANDAREA_AVG, LANDAREA_MODE, LANDAREA_MEDI, BASEMENTAREA_AVG, BASEMENTAREA_MODE, BASEMENTAREA_MEDI, NONLIVINGAREA_AVG, NONLIVINGAREA_MODE, NONLIVINGAREA_MEDI, ELEVATORS_AVG, ELEVATORS_MODE, ELEVATORS_MEDI, APARTMENTS_AVG, APARTMENTS_MODE, APARTMENTS_MEDI, ENTRANCES_AVG, ENTRANCES_MODE, ENTRANCES_MEDI, LIVINGAREA_AVG, LIVINGAREA_MODE, LIVINGAREA_MEDI)) # Remove variables
+
+# Check to make sure the variable removal worked
+train_fold_update_1 |>
+  ncol() # Count the number of remaining columns
+```
+
+## Create Factors & Examine Variability Within Columns
+
+```{r}
+# Examine the updated training fold
+# train_fold_update_1 |>
+  # summary()
+
+# Convert categorical variables to factors
+train_fold_update_2 <- train_fold_update_1 |>
+  mutate(NAME_CONTRACT_TYPE = factor(NAME_CONTRACT_TYPE),
+         CODE_GENDER = factor(CODE_GENDER),
+         FLAG_OWN_CAR = factor(FLAG_OWN_CAR),
+         FLAG_OWN_REALTY = factor(FLAG_OWN_REALTY),
+         NAME_TYPE_SUITE = factor(NAME_TYPE_SUITE),
+         NAME_INCOME_TYPE = factor(NAME_INCOME_TYPE),
+         NAME_EDUCATION_TYPE = factor(NAME_EDUCATION_TYPE),
+         NAME_FAMILY_STATUS = factor(NAME_FAMILY_STATUS),
+         NAME_HOUSING_TYPE = factor(NAME_HOUSING_TYPE),
+         OCCUPATION_TYPE = factor(OCCUPATION_TYPE),
+         WEEKDAY_APPR_PROCESS_START = factor(WEEKDAY_APPR_PROCESS_START),
+         ORGANIZATION_TYPE = factor(ORGANIZATION_TYPE),
+         FONDKAPREMONT_MODE = factor(FONDKAPREMONT_MODE),
+         HOUSETYPE_MODE = factor(HOUSETYPE_MODE),
+         WALLSMATERIAL_MODE = factor(WALLSMATERIAL_MODE),
+         EMERGENCYSTATE_MODE = factor(EMERGENCYSTATE_MODE)) # Factor all listed variables
+
+# Examine the updated training fold
+# train_fold_update_2 |>
+  # summary()
+```
+
+## Eliminate Columns with Little to No Variation
+
+When examining the columns, I noticed that many had very little variability and therefore, would have a much lower positive impact on a predictive model's performance. I therefore eliminated all columns that contained \>80% of the same variation of response. These columns included CNT_CHILDREN, FLAG_MOBILE, FLAG_EMP_PHONE, FLAG_WORK_PHONE, FLAG_CONT_MOBILE, FLAG_EMAIL, REG_REGION_NOT_LIVE_REGION, REG_REGION_NOT_WORK_REGION, LIVE_REGION_NOT_WORK_REGION, REG_CITY_NOT_LIVE_CITY, LIVE_CITY_NOT_WORK_CITY, YEARS_BEGINEXPLUATION_AVG, YEARS_BEGINEXPLUATION_MODE, YEARS_BEGINEXPLUATION_MEDI, EMERGENCYSTATE_MODE, DEF_30_CNT_SOCIAL_CIRCLE, OBS_30_CNT_SOCIAL_CIRCLE, OBS_60_CNT_SOCIAL_CIRCLE, DEF_60_CNT_SOCIAL_CIRCL, FLAG_DOCUMENT_2, FLAG_DOCUMENT_3, FLAG_DOCUMENT_4, FLAG_DOCUMENT_5, FLAG_DOCUMENT_6, FLAG_DOCUMENT_7, FLAG_DOCUMENT_8, FLAG_DOCUMENT_9, FLAG_DOCUMENT_10, FLAG_DOCUMENT_11, FLAG_DOCUMENT_12, FLAG_DOCUMENT_13, FLAG_DOCUMENT_14, FLAG_DOCUMENT_15, FLAG_DOCUMENT_16, FLAG_DOCUMENT_17, FLAG_DOCUMENT_18, FLAG_DOCUMENT_19, FLAG_DOCUMENT_20, FLAG_DOCUMENT_21, AMT_REQ_CREDIT_BUREAU_HOUR, AMT_REQ_CREDIT_BUREAU_DAY, AMT_REQ_CREDIT_BUREAU_WEEK, AMT_REQ_CREDIT_BUREAU_MON, AMT_REQ_CREDIT_BUREAU_QRT, and AMT_REQ_CREDIT_BUREAU_YEAR. As a result, I was able to eliminate 45 variables that would not impact the model in any significant way.
+
+```{r}
+# Remove variables with <20% variability from the train fold
+train_fold_update_3 <- train_fold_update_2 |>
+  select(-c(CNT_CHILDREN, FLAG_MOBIL, FLAG_EMP_PHONE, FLAG_WORK_PHONE, FLAG_CONT_MOBILE, FLAG_EMAIL, REG_REGION_NOT_LIVE_REGION, REG_REGION_NOT_WORK_REGION, LIVE_REGION_NOT_WORK_REGION, REG_CITY_NOT_LIVE_CITY, LIVE_CITY_NOT_WORK_CITY, YEARS_BEGINEXPLUATATION_AVG, YEARS_BEGINEXPLUATATION_MODE, YEARS_BEGINEXPLUATATION_MEDI, EMERGENCYSTATE_MODE, DEF_30_CNT_SOCIAL_CIRCLE, OBS_30_CNT_SOCIAL_CIRCLE, OBS_60_CNT_SOCIAL_CIRCLE, DEF_60_CNT_SOCIAL_CIRCLE, FLAG_DOCUMENT_2, FLAG_DOCUMENT_3, FLAG_DOCUMENT_4, FLAG_DOCUMENT_5, FLAG_DOCUMENT_6, FLAG_DOCUMENT_7, FLAG_DOCUMENT_8, FLAG_DOCUMENT_9, FLAG_DOCUMENT_10, FLAG_DOCUMENT_11, FLAG_DOCUMENT_12, FLAG_DOCUMENT_13, FLAG_DOCUMENT_14, FLAG_DOCUMENT_15, FLAG_DOCUMENT_16, FLAG_DOCUMENT_17, FLAG_DOCUMENT_18, FLAG_DOCUMENT_19, FLAG_DOCUMENT_20, FLAG_DOCUMENT_21, AMT_REQ_CREDIT_BUREAU_HOUR, AMT_REQ_CREDIT_BUREAU_DAY, AMT_REQ_CREDIT_BUREAU_WEEK, AMT_REQ_CREDIT_BUREAU_MON, AMT_REQ_CREDIT_BUREAU_QRT, AMT_REQ_CREDIT_BUREAU_YEAR)) # Remove variables
+
+# Check to make sure the variable removal worked
+train_fold_update_3 |>
+  ncol() # Count the number of remaining columns
+```
+
+## Eliminate Columns with Little to No Predictability Power
+
+After examining the data and the attached dictionary, I noticed that some columns did not seem to be logically related to the target variable and therefore would not have the predictability power that I needed to accurately determine credit risk. As a result, I was able to eliminate 11 additional variables: FLAG_PHONE, FLOORS_MAX_AVG, FLOORS_MAX_MODE, FLOORS_MAX_MEDI, HOUR_APP_PROCESS_START, REG_CITY_NOT_WORK_CITY, TOTALAREA_MODE, WALLSMATERIAL_MODE, FONDKAPREMONT_MODE, WEEKDAY_APPR_PROCESS_START, and REGION_RATING_CLIENT_W_CITY which is very similar to REGION_RATING_CLIENT and may create multicollinearity in future models.
+
+```{r}
+train_fold_update_4 <- train_fold_update_3 |>
+  select(-c(FLAG_PHONE, FLOORSMAX_AVG, FLOORSMAX_MODE, FLOORSMAX_MEDI, HOUR_APPR_PROCESS_START, REG_CITY_NOT_WORK_CITY, TOTALAREA_MODE, WALLSMATERIAL_MODE, FONDKAPREMONT_MODE, WEEKDAY_APPR_PROCESS_START, REGION_RATING_CLIENT_W_CITY)) # Remove variables
+
+# Check to make sure the variable removal worked
+train_fold_update_4 |>
+  ncol() # Count the number of remaining columns
+```
+
+## Process Blank Data Categories
+
+There were a couple of the remaining variables that had large amounts of blank observations. These columns included NAME_TYPE_SUITE, OCCUPATION_TYPE, and HOUSETYPE_MODE. NAME_TYPE_SUITE had two "Other" categories and one blank category. After examining the data dictionary to make sure that I wouldn't be losing any information, I combined these 3 categories into one category called "Other" to make the data more usable. Unfortunately, the data dictionary did not contain any information about the difference between the "Other_A" and the "Other_B" categories so I decided to combine them for the sake of simplicity. OCCUPATION_TYPE and HOUSETYPE_MODE had one blank category each which I was able to use to create a more descriptive "Other" category. I then factored all 3 variables to make them more usable in the modeling process.
+
+```{r}
+# Update the NAME_TYPE_SUITE, OCCUPATION_TYPE, and HOUSETYPE_MODE variables to create inclusive "Other" categories
+train_fold_update_5 <- train_fold_update_4 |>
+  mutate(NAME_TYPE_SUITE = case_when(NAME_TYPE_SUITE %in% c("", "Other_A", "Other_B", "Other") ~ "Other",  # Combine blanks and 2 "other" categories into "Other" category
+                                     TRUE ~ NAME_TYPE_SUITE), # Keep all other values unchanged
+    OCCUPATION_TYPE = case_when(OCCUPATION_TYPE == "" ~ "Other",  # Replace blank values with "Other"
+                                TRUE ~ OCCUPATION_TYPE), # Keep all other values unchanged
+    HOUSETYPE_MODE = case_when(HOUSETYPE_MODE == "" ~ "other", # Replace blank values with "Other"
+                               TRUE ~ HOUSETYPE_MODE)
+  )
+
+# Factor the 3 variables
+train_fold_update_5 <- train_fold_update_5 |>
+  mutate(NAME_TYPE_SUITE = factor(NAME_TYPE_SUITE),
+        OCCUPATION_TYPE = factor(OCCUPATION_TYPE),
+        HOUSETYPE_MODE = factor(HOUSETYPE_MODE))
+
+# Check that the mutation and factoring worked
+train_fold_update_5 |>
+  select(NAME_TYPE_SUITE, OCCUPATION_TYPE, HOUSETYPE_MODE) |>
+  summary()
+
+# Examine OCCUPATION_TYPE factor levels
+# levels(train_fold_update_5$OCCUPATION_TYPE)
+```
+
+## Bin OWN_CAR_AGE
+
+The OWN_CAR_AGE variable has many missing values because there are many people in this dataset who do not own a car. Thus, they are all listed as NAs. To create a variable that is more descriptive and includes the individuals who do not own cars, I used a binning technique to bin the OWN_CAR_AGE variable. This allows the people who do not own cars to be in their own bin, allowing them to be a part of the predictive model and effectively combining the two variables, OWN_CAR_AGE and FLAG_OWN_CAR. Finally, I removed OWN_CAR_AGE and FLAG_OWN_CAR from the dataset to reduce issues with multicollinearity in future models.
+
+```{r}
+# Bin OWN_CAR_AGE variable
+train_fold_update_5$OWN_CAR_BIN <- train_fold_update_5$OWN_CAR_AGE |>
+        (\(x) ifelse(is.na(x), -1, x))() |> 
+        cut(breaks = c(-1, 0, 5, 10, 15, 20, 25, 30, 100), 
+        right = FALSE, 
+        labels = c("No Car", "0-4 Years Old", "5-9 Years Old", "10-14 Years Old", 
+                 "15-19 Years Old", "20-24 Years Old", "25-29 Years Old", "30+ Years Old"))
+
+# Check that binning worked
+train_fold_update_5$OWN_CAR_BIN |>
+  summary()
+
+# Remove OWN_CAR_AGE and FLAG_OWN_CAR from the dataset
+train_fold_update_6 <- train_fold_update_5 |>
+  select(-c(FLAG_OWN_CAR, OWN_CAR_AGE)) # Remove variables
+
+# Check to make sure the variable removal worked
+train_fold_update_6 |>
+  ncol() # Count the number of remaining columns
+```
+
+## Process DAYS_EMPLOYED Outliers
+
+In the process of examining the summary for each variable left in the dataset, I noticed that the DAYS_EMPLOYED variable had a bunch of values that were positive (not possible for the format of the dataset) and impossible (for example, a value that suggests that someone has been working for 1000 years). Since the observation should record a negative value: the number of days before application that the person started current employment, I had planned to flip the sign on the positive values that were in a probable range for the dataset but had the wrong sign. However, after further inspection, I realized that all of the positive values were outside the range of probability which I decided would be the equivalent of 50 years. As such, these 38697 positive observations were imputed with the median number of days worked to eliminate improbable outliers. The median was chosen because the skewed distribution of the observations resulted in a lower, skewed mean.
+
+```{r}
+# Examine DAYS_EMPLOYED to count the observations >0
+train_fold_update_6 |>
+  select(DAYS_EMPLOYED) |>
+  filter(DAYS_EMPLOYED > 0) |>
+  nrow()
+
+# Count DAYS_EMPLOYED observations >18250
+train_fold_update_6 |>
+  select(DAYS_EMPLOYED) |>
+  filter(DAYS_EMPLOYED > 18250) |>
+  nrow()
+
+# Count DAYS_EMPLOYED observations between 0 and 18250
+train_fold_update_6 |>
+  select(DAYS_EMPLOYED) |>
+  filter(DAYS_EMPLOYED > 0 & DAYS_EMPLOYED < 18250) |>
+  nrow()
+
+# Get the median of the DAYS_EMPLOYED column
+train_fold_update_6|>
+  select(DAYS_EMPLOYED) |>
+  filter(DAYS_EMPLOYED < 18250) |> # Filter out outliers
+  summarize(median_DAYS_EMPLOYED = median(DAYS_EMPLOYED))
+
+# Impute the outliers with the median of the DAYS_EMPLOYED column
+train_fold_update_7 <- train_fold_update_6 |>
+  mutate(DAYS_EMPLOYED = ifelse(DAYS_EMPLOYED >  18250, -1648, DAYS_EMPLOYED))
+
+# Check that the imputation worked
+summary(train_fold_update_7$DAYS_EMPLOYED)
+```
+
+## Examine the Cleaned Dataset
+
+The next step I took was to examine the cleaned dataset to try to understand which variables might be good predictors and therefore good candidates for additional analysis against the target variable.There were 29 remaining columns - one of which is the target variable and one of which is the ID variable. Thus, we are left with 27 potential predictor variables that can be used to build our model. After examining the summary, the data looks clean and less highly dimensional than at the start of our EDA.
+
+```{r}
+# Count the number of columns remaining in the dataset
+train_fold_update_7 |>
+  ncol()
+
+# Examine the cleaned dataset
+# train_fold_update_7 |>
+  # summary()
+```
+
+## Majority-Class Predictive Model
+
+The next step in my EDA process was to understand the success of a majority-class predictive model. I did this by identifying the majority class and then computing the baseline accuracy of the model by calculating the probability of non-default. As a result of my calculations, I was able to find that a majority-class predictive model would be accurate about 92% of the time. This is the benchmark for further modeling as more complicated models should be able to beat this accuracy.
+
+```{r}
+# Identify Majority Class
+table(train$TARGET)  # Count occurrences of 0s and 1s
+majority_class <- as.integer(names(which.max(table(train$TARGET))))
+majority_class
+
+# Compute Baseline Accuracy
+majority_accuracy <- max(prop.table(table(train$TARGET)))
+majority_accuracy
+```
+
+## Potential Predictor Analysis
+
+The final step in my EDA process, was to identify potential predictors from the remaining 27 variables. I did this by generating graphs for each variable to understand the relationship between the target variable and the predictor variable. Below are my graphs and observations for 7 of the potential predictive variables that, based on logical reason, I thought might have predictive potential. I specifically did not include certain predictors like CODE_GENDER, AMT_INCOME_TOTAL, and DAYS_BIRTH variables in my preliminary analysis as I believe that including these variables could create inherent and implicit bias in future models against those whom Home Credit is attempting to serve.
+
+#### 1. NAME_CONTRACT_TYPE
+
+From this graph, it seems that cash loans are more likely to result in default. Therefore, it may be that people who take out cash loans are more likely to default. This might be a good predictor depending on the graphic results of the other variables.
+
+```{r}
+train_fold_update_7 |>
+  ggplot(mapping = aes(x = NAME_CONTRACT_TYPE, fill = as.factor(TARGET))) +
+  geom_bar(position = "fill") +
+  theme_minimal() + 
+  labs(title = "TARGET ~ NAME_CONTRACT_TYPE")
+```
+
+#### 2. OWN_CAR_BIN
+
+There seemed to be a slight rise in loan default as the age of the owned car increases, or if the individual doesn't own a car. As such, this might be an important predictor. It is important to note that it is still important to provide a good lending experience to those who do not own a car and therefore may not have a credit history. As such, it is important to use transactional data and other predictors in the model so that this underserved population does not get excluded or overlooked by the model.
+
+```{r}
+train_fold_update_7 |>
+  ggplot(mapping = aes(x = OWN_CAR_BIN, fill = as.factor(TARGET))) +
+  geom_bar(position = "fill") +
+  theme_minimal() + 
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  labs(title = "TARGET ~ OWN_CAR_BIN")
+```
+
+#### 3. FLAG_OWN_REALTY
+
+The default risk seems to be very similar for those who own realty vs. those who do not and therefore, at first glance this does not seem like an important predictor. This will also likely not be included because it may end up excluding those who do not own realty and therefore are less likely to have a credit history, thus creating bias in the model against the population that Home Credit is attempting to serve.
+
+```{r}
+train_fold_update_7 |>
+  ggplot(mapping = aes(x = FLAG_OWN_REALTY, fill = as.factor(TARGET))) +
+  geom_bar(position = "fill") +
+  theme_minimal() + 
+  labs(title = "TARGET ~ FLAG_OWN_REALTY")
+```
+
+#### 4. AMT_GOODS_PRICE
+
+I thought that the price of the goods for which the loan was being given might have an impact but it looks like the central tendency surrounding the amount of the loan doesn't vary much between the two default groups. However, the non-default group seems to have a wider spread of outliers on the top end of the spectrum. This is likely not a very important predictor and can probably be left out of the initial model.
+
+```{r}
+train_fold_update_7 |>
+  ggplot(mapping = aes(x = as.factor(TARGET), y = AMT_GOODS_PRICE)) +
+  geom_boxplot() +
+  theme_minimal() + 
+  labs(title = "TARGET ~ AMT_GOODS_PRICE")
+```
+
+#### 5. DAYS_EMPLOYED
+
+It seems from the graph that those with fewer days employed are slightly more likely to default on their loans. This may be because they are slightly less established in their jobs and in their financials and are therefore slightly more likely to default on a loan. As such, this may be an important predictor.
+
+```{r}
+train_fold_update_7 |>
+  ggplot(mapping = aes(x = as.factor(TARGET), y = DAYS_EMPLOYED)) +
+  geom_boxplot() +
+  theme_minimal() + 
+  labs(title = "TARGET ~ DAYS_EMPLOYED")
+
+```
+
+#### 6. NAME_EDUCATION_TYPE
+
+This seems to be an important predictor variable as those who completed less education seem to be more likely to default on loans. It is important to avoid using this with other predictors to avoid excluding or overlooking those in the underserved population who may not be as educated, thereby creating bias in the model.
+
+```{r}
+train_fold_update_7 |>
+  ggplot(mapping = aes(x = NAME_EDUCATION_TYPE, fill = as.factor(TARGET))) +
+  geom_bar(position = "fill") +
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "TARGET ~ NAME_EDUCATION_TYPE")
+```
+
+#### 7. EXT_SOURCE_2
+
+This is a normalized credit score from an external source. I chose to plot this variable against the target because it had the least NAs. This is a good indicator that, among those with a credit score, those who have lower credit scores are at a higher risk of default. It is important to use this data for those who have a credit history and create a similar metric for those without a credit history from the provided transactional data. Using this score alone will exclude and bias the model against the population Home Credit is trying to serve.
+
+```{r}
+train_fold_update_7 |>
+  ggplot(mapping = aes(x = as.factor(TARGET), y = EXT_SOURCE_2)) +
+  geom_boxplot() +
+  theme_minimal() + 
+  labs(title = "TARGET ~ EXT_SOURCE_2")
+```
+
+## Final Summary
+
+This EDA was very important to understanding the training dataset and the variables that are available to me within it. The main challenge for me at first was to understand how to address the high dimensionality of the dataset without losing important information that would help improve a model in the future. To reduce the dimension in the dataset, I followed my professor's counsel to exclude columns with majority missing data and columns with low variation. After eliminating these variables, I was left with 30 remaining columns. After processing the missing, blank, and outlier data to clean some of the important remaining columns, I was able to create exploratory graphs to show the relationship between 7 of the remaining predictor variables and the target variable - payment difficulties. As a result, I was able to find 5 potentially important predictor variables to be used in future models: NAME_CONTRACT_TYPE (the type of loan), OWN_CAR_BIN (a binned variable that shows how old the owned car is), DAYS_EMPLOYED (the number of days employed before loan application), NAME_EDUCATION_TYPE (highest education level achieved), and EXT_SOURCE_2 (a normalized credit score). After completing my EDA, I faced two remaining questions: 1) How to aggregate and join the transactional data in a way that creates a good approximation of a credit score for the unbanked population Home Credit is trying to serve, and 2) How to eliminate bias as much as possible so that the final model is not biased against the unbanked population Home Credit is trying to serve. These questions remain because I did not get to explore the transactional data as much as I would have liked and I noticed that the 5 predictive variables I found could introduce bias into the model if not used correctly. Overall, this EDA was very informative and helped me understand the breadth and scope of the data available to predict loan payment difficulties.
