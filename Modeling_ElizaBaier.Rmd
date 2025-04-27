@@ -1,0 +1,526 @@
+---
+title: "Modeling"
+author: "Eliza Baier"
+date: "March 8, 2025"
+format: 
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    toc-float: true
+    toc-title: "Contents"
+    self-contained: true
+execute:
+  include: true
+  eval: true
+  warning: false
+  message: false
+editor: 
+  markdown: 
+    wrap: sentence
+---
+
+## Business Problem Summary
+
+Unbanked individuals struggle to get loans from trustworthy lenders which prevents them from owning property and establishing credit history. To properly serve this population, Home Credit needs to be able to predict their potential clients’ risk of defaulting. Accurately predicting the risk associated with each client will allow Home Credit to effectively serve an underserved population while increasing revenue and minimizing risk. 
+
+## Analytical Problem Summary
+
+The analytical challenge with this project is to take a highly-dimensional dataset and create a model that is not biased against the target underserved populations. To do this, it will be important to use a combination of the provided credit scores and transactional data for those who do not have a credit score. To decrease the dimensionality of the dataset, it will be important to eliminate some of the columns and clean the data so that the remaining columns are an accurate representation of the sample.
+
+## Modeling Approach to the Business Problem
+
+This notebook contains my individual modeling efforts the provided data. This modeling aims to build a baseline model as well as several Random Forest models that I hope will outperform the baseline. To do this, I first loaded and examined the application data, combined it with the bureau data, cleaned and evaluated the merged dataset, split the training data into train and validation folds to provide an avenue for evaluating and comparing model metrics, and built both a baseline model and six random forest models.
+
+## Load Libraries
+
+First, I loaded necessary libraries and read in the application data csv. 
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(randomForest)
+library(caret)
+library(nnet)
+library(rminer)
+train <- read.csv("application_train.csv")
+```
+
+## Clean and Update Application Data
+
+The first step after loading libraries was to clean and update the application data. I used feature engineering to create several new variables and removed all of the irrelevant variables that I identified in my EDA from the dataset. I then cleaned and imputed important variables with appropriate values and finished preparing the dataset to be merged with the bureau data. 
+
+```{r}
+# Copy train set to new variable
+train_clean <- train
+
+# Impute OWN_CAR_BIN NAs with -1
+train_clean <- train_clean |>
+  mutate(OWN_CAR_AGE = ifelse(is.na(OWN_CAR_AGE), -1, OWN_CAR_AGE))
+
+# Create categorical OWN_CAR_BIN
+train_clean$OWN_CAR_BIN <- train_clean$OWN_CAR_AGE |>
+        cut(breaks = c(-1, 0, 5, 10, 15, 20, 25, 30, 100), 
+        right = FALSE, 
+        labels = c("No Car", "0-4 Years Old", "5-9 Years Old", "10-14 Years Old", 
+                 "15-19 Years Old", "20-24 Years Old", "25-29 Years Old", "30+ Years Old"))
+
+# Check OWN_CAR_BIN variable
+train_clean |>
+  count(OWN_CAR_BIN) |>
+  mutate(percentage = n / sum(n) * 100) |>
+  arrange(desc(n))
+
+# Create binary OWN_ASSET variable
+train_clean <- train_clean |>
+  mutate(OWN_ASSET = ifelse(FLAG_OWN_REALTY == "Y" | FLAG_OWN_CAR == "Y", 1, 0))
+
+# Check OWN_ASSET variable
+train_clean |>
+  count(OWN_ASSET) |>
+  mutate(percentage = n / sum(n) * 100) |>
+  arrange(desc(n))
+
+# Remove irrelevant variables
+train_clean <- train_clean |>
+  select(-c(COMMONAREA_AVG, COMMONAREA_MODE, COMMONAREA_MEDI, NONLIVINGAPARTMENTS_AVG, NONLIVINGAPARTMENTS_MODE, NONLIVINGAPARTMENTS_MEDI, LIVINGAPARTMENTS_AVG, LIVINGAPARTMENTS_MODE, LIVINGAPARTMENTS_MEDI, FLOORSMIN_AVG, FLOORSMIN_MODE, FLOORSMIN_MEDI, YEARS_BUILD_AVG, YEARS_BUILD_MODE, YEARS_BUILD_MEDI, LANDAREA_AVG, LANDAREA_MODE, LANDAREA_MEDI, BASEMENTAREA_AVG, BASEMENTAREA_MODE, BASEMENTAREA_MEDI, NONLIVINGAREA_AVG, NONLIVINGAREA_MODE, NONLIVINGAREA_MEDI, ELEVATORS_AVG, ELEVATORS_MODE, ELEVATORS_MEDI, APARTMENTS_AVG, APARTMENTS_MODE, APARTMENTS_MEDI, ENTRANCES_AVG, ENTRANCES_MODE, ENTRANCES_MEDI, LIVINGAREA_AVG, LIVINGAREA_MODE, LIVINGAREA_MEDI, CNT_CHILDREN, FLAG_MOBIL, FLAG_EMP_PHONE, FLAG_WORK_PHONE, FLAG_CONT_MOBILE, FLAG_EMAIL, REG_REGION_NOT_LIVE_REGION, REG_REGION_NOT_WORK_REGION, LIVE_REGION_NOT_WORK_REGION, REG_CITY_NOT_LIVE_CITY, LIVE_CITY_NOT_WORK_CITY, YEARS_BEGINEXPLUATATION_AVG, YEARS_BEGINEXPLUATATION_MODE, YEARS_BEGINEXPLUATATION_MEDI, EMERGENCYSTATE_MODE, DEF_30_CNT_SOCIAL_CIRCLE, OBS_30_CNT_SOCIAL_CIRCLE, OBS_60_CNT_SOCIAL_CIRCLE, DEF_60_CNT_SOCIAL_CIRCLE, FLAG_DOCUMENT_2, FLAG_DOCUMENT_3, FLAG_DOCUMENT_4, FLAG_DOCUMENT_5, FLAG_DOCUMENT_6, FLAG_DOCUMENT_7, FLAG_DOCUMENT_8, FLAG_DOCUMENT_9, FLAG_DOCUMENT_10, FLAG_DOCUMENT_11, FLAG_DOCUMENT_12, FLAG_DOCUMENT_13, FLAG_DOCUMENT_14, FLAG_DOCUMENT_15, FLAG_DOCUMENT_16, FLAG_DOCUMENT_17, FLAG_DOCUMENT_18, FLAG_DOCUMENT_19, FLAG_DOCUMENT_20, FLAG_DOCUMENT_21, AMT_REQ_CREDIT_BUREAU_HOUR, AMT_REQ_CREDIT_BUREAU_DAY, AMT_REQ_CREDIT_BUREAU_WEEK, AMT_REQ_CREDIT_BUREAU_MON, AMT_REQ_CREDIT_BUREAU_QRT, AMT_REQ_CREDIT_BUREAU_YEAR, FLAG_PHONE, FLOORSMAX_AVG, FLOORSMAX_MODE, FLOORSMAX_MEDI, HOUR_APPR_PROCESS_START, REG_CITY_NOT_WORK_CITY, TOTALAREA_MODE, WALLSMATERIAL_MODE, FONDKAPREMONT_MODE, WEEKDAY_APPR_PROCESS_START, REGION_RATING_CLIENT_W_CITY))
+
+# Factor remaining categorical variables
+train_clean <- train_clean |>
+  mutate(NAME_CONTRACT_TYPE = factor(NAME_CONTRACT_TYPE),
+         NAME_TYPE_SUITE = factor(NAME_TYPE_SUITE),
+         OCCUPATION_TYPE = factor(OCCUPATION_TYPE),
+         CODE_GENDER = factor(CODE_GENDER),
+         FLAG_OWN_CAR = factor(FLAG_OWN_CAR),
+         FLAG_OWN_REALTY = factor(FLAG_OWN_REALTY),
+         NAME_TYPE_SUITE = factor(NAME_TYPE_SUITE),
+         NAME_INCOME_TYPE = factor(NAME_INCOME_TYPE),
+         NAME_EDUCATION_TYPE = factor(NAME_EDUCATION_TYPE),
+         NAME_FAMILY_STATUS = factor(NAME_FAMILY_STATUS),
+         NAME_HOUSING_TYPE = factor(NAME_HOUSING_TYPE),
+         HOUSETYPE_MODE = factor(HOUSETYPE_MODE),
+         OCCUPATION_TYPE = factor(OCCUPATION_TYPE),
+         ORGANIZATION_TYPE = factor(ORGANIZATION_TYPE),
+         HOUSETYPE_MODE = factor(HOUSETYPE_MODE),
+         OWN_ASSET = factor(OWN_ASSET),
+         TARGET = factor(TARGET))
+
+# Combine 'Other' categories in factored variables 
+train_clean <- train_clean |>
+  mutate(
+    NAME_TYPE_SUITE = case_when(
+      NAME_TYPE_SUITE %in% c("", "Other_A", "Other_B", "Other") ~ "Other",
+      # Combine blanks and 2 "other" categories into "Other" category
+      TRUE ~ NAME_TYPE_SUITE
+    ),
+    # Keep all other values unchanged
+    OCCUPATION_TYPE = case_when(OCCUPATION_TYPE == "" ~ "Other", # Replace blank values with "Other"
+                                TRUE ~ OCCUPATION_TYPE),
+    # Keep all other values unchanged
+    HOUSETYPE_MODE = case_when(HOUSETYPE_MODE == "" ~ "other", # Replace blank values with "Other"
+                               TRUE ~ HOUSETYPE_MODE))
+
+# Impute DAYS_EMPLOYED with median
+train_clean <- train_clean |>
+  mutate(DAYS_EMPLOYED = ifelse(DAYS_EMPLOYED > 18250, median(DAYS_EMPLOYED), DAYS_EMPLOYED))
+
+# Impute EXT_SOURCE_1 with 0 indicating no credit score
+train_clean <- train_clean |>
+  mutate(EXT_SOURCE_1 = ifelse(is.na(EXT_SOURCE_1), 0, EXT_SOURCE_1))
+
+# Impute EXT_SOURCE_2 with 0 indicating no credit score
+train_clean <- train_clean |>
+  mutate(EXT_SOURCE_2 = ifelse(is.na(EXT_SOURCE_2), 0, EXT_SOURCE_2))
+
+# Impute EXT_SOURCE_3 with 0 indicating no credit score
+train_clean <- train_clean |>
+  mutate(EXT_SOURCE_3 = ifelse(is.na(EXT_SOURCE_3), 0, EXT_SOURCE_3))
+
+# Impute CNT_FAM_MEMBERS with the median
+train_clean <- train_clean |>
+  mutate(CNT_FAM_MEMBERS = ifelse(is.na(CNT_FAM_MEMBERS), median(CNT_FAM_MEMBERS, na.rm = TRUE), CNT_FAM_MEMBERS))
+
+# Impute AMT_ANNUITY with the median
+train_clean <- train_clean |>
+  mutate(AMT_ANNUITY = ifelse(is.na(AMT_ANNUITY), median(AMT_ANNUITY, na.rm = TRUE), AMT_ANNUITY))
+
+# Impute AMT_GOODS_PRICE with the median
+train_clean <- train_clean |>
+  mutate(AMT_GOODS_PRICE = ifelse(is.na(AMT_GOODS_PRICE), median(AMT_GOODS_PRICE, na.rm = TRUE), AMT_GOODS_PRICE))
+
+# Impute DAYS_LAST_PHONE_CHANGE with the median
+train_clean <- train_clean |>
+  mutate(DAYS_LAST_PHONE_CHANGE = ifelse(is.na(DAYS_LAST_PHONE_CHANGE), median(DAYS_LAST_PHONE_CHANGE, na.rm = TRUE), DAYS_LAST_PHONE_CHANGE))
+
+colSums(is.na(train_clean))
+
+train_clean |>
+  str()
+
+# Save as RDS
+saveRDS(train_clean, "application_train_cleaned.rds")
+
+# Save as CSV for visual exploration
+write.csv(train_clean, "application_train_cleaned.csv", row.names = FALSE)
+```
+
+## Read in Cleaned Application and Bureau Data
+
+Another team member cleaned the bureau data and I read it in to my notebook using the readRDS function.
+
+```{r}
+getwd()
+setwd("C:\\Users\\eliza\\Documents\\MSBA\\Spring 2025\\IS 6812 Practice Capstone")
+file.exists("application_train_cleaned.csv")
+application <- train_clean
+bureau <- readRDS("mutated_merged_bureau.rds")
+head(bureau)
+```
+
+## Merge Bureau Data with Application Data
+
+I then merged the cleaned bureau data with my cleaned application data and checked for missings. Because the bureau dataset had a lot of missing values, I was able to identify columns that would need to be imputed. 
+
+```{r}
+# Merge application and bureau data
+merge <- application |>
+  left_join(bureau, by = "SK_ID_CURR")
+
+# Check merge
+head(merge)
+
+# Get number of missings
+sum(is.na(merge$SK_ID_BUREAU))
+
+# Summarize missings
+na_summary <- merge |> 
+  summarise(across(everything(), ~ sum(is.na(.)))) |>
+  pivot_longer(everything(), names_to = "column", values_to = "missing_count") |>
+  filter(missing_count > 0) 
+
+# Get column list for missing data
+na_list <- setNames(as.list(na_summary$missing_count), na_summary$column) 
+na_list
+```
+
+```{r}
+# Check join
+length(intersect(application$SK_ID_CURR, bureau$SK_ID_CURR))
+length(unique(application$SK_ID_CURR))
+length(unique(bureau$SK_ID_CURR))
+```
+
+## Impute the Bureau NAs with 0
+
+The bureau data contained many missing values so I imputed the vast majority of them with 0s, and a few others with appropriate values. 
+
+```{r}
+# Fill in missing data with 0s
+impute_numeric_col <- function(df, col_name, strategy = "median") {
+  # Check if the specified column exists
+  if (!col_name %in% names(df)) {
+    warning(paste("Column", col_name, "not found in df. Returning original df."))
+    return(df)
+  }
+  # Check if it's numeric
+  if (!is.numeric(df[[col_name]])) {
+    warning(paste("Column", col_name, "is not numeric. Returning original df."))
+    return(df)
+  }
+  
+  # Determine the fill value based on the strategy
+  fill_val <- NA
+  if (strategy == "zero") {
+    fill_val <- 0
+  } else if (strategy == "min") {
+    fill_val <- min(df[[col_name]], na.rm = TRUE)
+  } else if (strategy == "max") {
+    fill_val <- max(df[[col_name]], na.rm = TRUE)
+  } else if (strategy == "median") {
+    fill_val <- median(df[[col_name]], na.rm = TRUE)
+  } else if (strategy == "mean") {
+    fill_val <- mean(df[[col_name]], na.rm = TRUE)
+  } else if (strategy == "sum") {
+    fill_val <- sum(df[[col_name]], na.rm = TRUE)
+  } else {
+    stop("strategy must be one of 'zero', 'min', 'max', 'median', or 'mean'")
+  }
+  
+  # Replace NA with the chosen fill value
+  df[[col_name]][is.na(df[[col_name]])] <- fill_val
+  
+  return(df)
+}
+
+# Impute NAs in merge$SK_ID_BUREAU with 0s
+merge <- merge |>
+  mutate(SK_ID_BUREAU = ifelse(is.na(SK_ID_BUREAU), 0, SK_ID_BUREAU))
+
+# Remove AMT_ANNUITY.y and CREDIT_CURRENCY because of lack of contribution to the model
+merge <- merge |>
+  select(-AMT_ANNUITY.y, -CREDIT_CURRENCY)
+
+# Impute NAs in CREDIT_TYPE with "None"
+merge <- merge |>
+  mutate(CREDIT_TYPE = ifelse(is.na(CREDIT_TYPE), "None", CREDIT_TYPE))
+
+# Impute NAs in STATUS with "X"
+merge <- merge |>
+  mutate(STATUS = ifelse(is.na(STATUS), "X", STATUS))
+
+# Impute NAs in DAYS_CREDIT with 0
+merge <- merge |>
+  mutate(DAYS_CREDIT = ifelse(is.na(DAYS_CREDIT), 0, DAYS_CREDIT))
+
+# Impute NAs in CREDIT_DAY_OVERDUE with 0
+merge <- merge |>
+  mutate(CREDIT_DAY_OVERDUE = ifelse(is.na(CREDIT_DAY_OVERDUE), 0, CREDIT_DAY_OVERDUE))
+
+# Impute NAs in DAYS_CREDIT_ENDDATE with 0
+merge <- merge |>
+  mutate(DAYS_CREDIT_ENDDATE = ifelse(is.na(DAYS_CREDIT_ENDDATE), 0, DAYS_CREDIT_ENDDATE))
+
+# Impute NAs in DAYS_ENDDATE_FACT with 0
+merge <- merge |>
+  mutate(DAYS_ENDDATE_FACT = ifelse(is.na(DAYS_ENDDATE_FACT), 0, DAYS_ENDDATE_FACT))
+
+# Impute NAs in AMT_CREDIT_MAX_OVERDUE with 0
+merge <- merge |>
+  mutate(AMT_CREDIT_MAX_OVERDUE = ifelse(is.na(AMT_CREDIT_MAX_OVERDUE), 0, AMT_CREDIT_MAX_OVERDUE))
+
+# Impute NAs in CNT_CREDIT_PROLONG with 0
+merge <- merge |>
+  mutate(CNT_CREDIT_PROLONG = ifelse(is.na(CNT_CREDIT_PROLONG), 0, CNT_CREDIT_PROLONG))
+
+# Impute NAs in AMT_CREDIT_SUM with 0
+merge <- merge |>
+  mutate(AMT_CREDIT_SUM = ifelse(is.na(AMT_CREDIT_SUM), 0, AMT_CREDIT_SUM))
+
+# Impute NAs in AMT_CREDIT_SUM_DEBT with 0
+merge <- merge |>
+  mutate(AMT_CREDIT_SUM_DEBT = ifelse(is.na(AMT_CREDIT_SUM_DEBT), 0, AMT_CREDIT_SUM_DEBT))
+
+# Impute NAs in AMT_CREDIT_SUM_LIMIT with 0
+merge <- merge |>
+  mutate(AMT_CREDIT_SUM_LIMIT = ifelse(is.na(AMT_CREDIT_SUM_LIMIT), 0, AMT_CREDIT_SUM_LIMIT))
+
+# Impute NAs in AMT_CREDIT_SUM_OVERDUE with 0
+merge <- merge |>
+  mutate(AMT_CREDIT_SUM_OVERDUE = ifelse(is.na(AMT_CREDIT_SUM_OVERDUE), 0, AMT_CREDIT_SUM_OVERDUE))
+
+# Impute NAs in DAYS_CREDIT_UPDATE with 0
+merge <- merge |>
+  mutate(DAYS_CREDIT_UPDATE = ifelse(is.na(DAYS_CREDIT_UPDATE), 0, DAYS_CREDIT_UPDATE))
+
+# Impute NAs in CREDIT_ACTIVE with 0
+merge <- merge |>
+  mutate(CREDIT_ACTIVE = ifelse(is.na(CREDIT_ACTIVE), 0, CREDIT_ACTIVE))
+
+# Impute NAs in MONTHS_BALANCE with 0
+merge <- merge |>
+  mutate(MONTHS_BALANCE = ifelse(is.na(MONTHS_BALANCE), 0, MONTHS_BALANCE))
+```
+
+## Downsample
+
+After loading, cleaning, and merging the data, I down-sampled on the target variable to create a more even target distribution and so that I could use a subset of the data which would help my my Random Forest models would run faster. 
+
+```{r}
+# Create downsample function
+downsample_target <- function(df, target_col, ratio = 1.0, seed = 42) {
+  # Convert target_col to string if it's a symbol
+  target_col <- rlang::ensym(target_col)  # if you want tidy evaluation
+  
+  # Separate majority/minority
+  minority_df <- df %>% dplyr::filter(!!target_col == 1)
+  majority_df <- df %>% dplyr::filter(!!target_col == 0)
+  
+  set.seed(seed)
+  # Desired majority size
+  desired_majority_size <- floor(ratio * nrow(minority_df))
+  
+  # Downsample majority
+  majority_downsampled <- majority_df %>%
+    dplyr::sample_n(size = desired_majority_size)
+  
+  # Combine
+  combined_df <- dplyr::bind_rows(minority_df, majority_downsampled)
+  
+  return(combined_df)
+}
+
+# Downsample merged dataset
+merge_ds <- downsample_target(merge, TARGET, ratio = 2.33, seed = 123)
+
+# Target variable distribution in newdownsampled dataset
+merge_ds |>
+  count(TARGET) |>
+  mutate(percentage = n / sum(n) * 100) |>
+  arrange(desc(n))
+```
+
+## Train and Evaluate Logistic Regression
+
+I first trained and evaluated a logistic regression as a baseline to compare future models against. This model performed fairly well, with an AUC of 0.70. 
+
+```{r}
+# Fit logistic regression model
+model1 <- glm(TARGET ~ NAME_CONTRACT_TYPE + OWN_CAR_BIN + DAYS_EMPLOYED + NAME_EDUCATION_TYPE + EXT_SOURCE_1 +  EXT_SOURCE_2 + EXT_SOURCE_3, data = merge_ds, family = binomial)
+
+# View model summary
+summary(model1)
+
+# Predict probabilities on the same dataset
+pred_probs <- predict(model1, newdata = test_data, type = "response")
+
+# Compute the ROC curve
+roc_curve <- roc(test_data$TARGET, pred_probs)
+
+# Get the AUC score
+auc_score <- auc(roc_curve)
+
+# Print AUC for the logistic regression model
+print(round(auc_score, 2))
+```
+
+## Train & Evaluate Random Forest Model
+
+I trained six random forest models in the hopes that they would perform better than our benchmark logistic model. Unfortunately, because of the extreme imbalance in the TARGET variable, the random forest ended up chronically overfitting on the train set and therefore performing very poorly on the test set, despite downsampling to try and prevent this. Despite trying several different variations of the model, I was unable to solve the overfitting issue so my group moved on to trying gradient boosting.
+
+```{r}
+Train the Random Forest model 2
+set.seed(123)
+model2 <- randomForest(TARGET ~ . -ORGANIZATION_TYPE, data = train_merge_ds,
+                   	ntree = 500,
+                   	mtry = sqrt(ncol(train_merge_ds) - 1),
+                   	importance = TRUE)
+
+# Evaluate model 2
+# View sorted importance of each variable
+importance_values <- importance(model2)  # Get feature importance scores
+importance_values
+sorted_importance <- importance_values[order(-importance_values[, 1]), ]  # Sort by first column (MeanDecreaseGini)
+sorted_importance
+
+# Make predictions for model 2 on the train set
+train_predictions_m2 <- predict(model2, newdata = train_merge_ds, type = "response")
+train_predictions_m2 <- as.numeric(as.character(train_predictions_m2)) # convert to numeric to calculate ROC
+
+# Make predictions for model 2 on the test set
+test_predictions_m2 <- predict(model2, newdata = validation_merge_ds, type = "response")
+test_predictions_m2 <- as.numeric(as.character(test_predictions_m2)) # convert to numeric to calculate ROC
+
+# Calculate AUC for model 2 for train set
+train_roc_m2 <- roc(train_merge_ds$TARGET, train_predictions_m2)
+train_auc_m2 <- auc(train_roc_m2)
+print(paste("AUC for train set:", train_auc_m2)) # AUC = 1.00
+
+# Calculate AUC for model 2 for test set
+test_roc_m2 <- roc(validation_merge_ds$TARGET, test_predictions_m2)
+test_auc_m2 <- auc(test_roc_m2)
+print(paste("AUC for test set:", test_auc_m2)) # AUC = 0.61
+
+
+# Train Random Forest model 3
+model3 <- randomForest(TARGET ~ . -ORGANIZATION_TYPE, data = train_merge_ds,
+                   	ntree = 500,
+                   	mtry = sqrt(ncol(train_merge_ds) - 1),
+                   	importance = TRUE,
+                   	classwt = c(0.43, 2.33))
+
+# Evaluate model 3
+# Make predictions for model 3 on the train set
+train_predictions_m3 <- predict(model3, newdata = train_merge_ds, type = "response")
+train_predictions_m3 <- as.numeric(as.character(train_predictions_m3)) # convert to numeric to calculate ROC
+
+# Make predictions for model 3 on the test set
+test_predictions_m3 <- predict(model3, newdata = validation_merge_ds, type = "response")
+test_predictions_m3 <- as.numeric(as.character(test_predictions_m3)) # convert to numeric to calculate ROC
+
+# Calculate AUC for model 3 for train set
+train_roc_m3 <- roc(train_merge_ds$TARGET, train_predictions_m3)
+train_auc_m3 <- auc(train_roc_m3)
+print(paste("AUC for train set:", train_auc_m3)) # AUC = 1.00
+
+# Calculate AUC for model 3 for test set
+test_roc_m3 <- roc(validation_merge_ds$TARGET, test_predictions_m3)
+test_auc_m3 <- auc(test_roc_m3)
+print(paste("AUC for test set:", test_auc_m3)) # AUC = 0.58
+
+# Train Random Forest model 4
+model4 <- randomForest(TARGET ~ . -ORGANIZATION_TYPE, data = train_merge_ds,
+                   	ntree = 200,
+                   	maxnodes = 30,
+                   	nodesize = 10,
+                   	mtry = sqrt(ncol(train_merge_ds) - 1),
+                   	importance = TRUE)
+# Evaluate model 4
+# Make predictions for model 4 on the train set
+train_predictions_m4 <- predict(model4, newdata = train_merge_ds, type = "response")
+train_predictions_m4 <- as.numeric(as.character(train_predictions_m4)) # convert to numeric to calculate ROC
+
+# Make predictions for model 4 on the test set
+test_predictions_m4 <- predict(model4, newdata = validation_merge_ds, type = "response")
+test_predictions_m4 <- as.numeric(as.character(test_predictions_m4)) # convert to numeric to calculate ROC
+
+# Calculate AUC for model 4 for train set
+train_roc_m4 <- roc(train_merge_ds$TARGET, train_predictions_m4)
+train_auc_m4 <- auc(train_roc_m4)
+print(paste("AUC for train set:", train_auc_m4)) # AUC = 0.54
+
+# Calculate AUC for model 4 for test set
+test_roc_m4 <- roc(validation_merge_ds$TARGET, test_predictions_m4)
+test_auc_m4 <- auc(test_roc_m4)
+print(paste("AUC for test set:", test_auc_m4)) # AUC = 0.54
+
+# Train Random Forest model 5
+model5 <- randomForest(TARGET ~ EXT_SOURCE_3 + EXT_SOURCE_2 + DAYS_BIRTH + DAYS_CREDIT_UPDATE + DAYS_CREDIT + DAYS_ENDDATE_FACT + AMT_CREDIT + AMT_GOODS_PRICE + AMT_ANNUITY.x + AMT_INCOME_TOTAL + DAYS_CREDIT_ENDDATE + DAYS_ID_PUBLISH + CODE_GENDER + DAYS_EMPLOYED + CREDIT_TYPE + OWN_CAR_BIN + NAME_INCOME_TYPE + AMT_CREDIT_SUM + STATUS + EXT_SOURCE_1, data = train_merge_ds,
+                   	ntree = 500,
+                   	mtry = sqrt(ncol(train_merge_ds) - 1),
+                   	importance = TRUE)
+
+# Evaluate model 5
+# Make predictions for model 5 on the train set
+train_predictions_m5 <- predict(model5, newdata = train_merge_ds, type = "response")
+train_predictions_m5 <- as.numeric(as.character(train_predictions_m5)) # convert to numeric to calculate ROC
+
+# Make predictions for model 5 on the test set
+test_predictions_m5 <- predict(model5, newdata = validation_merge_ds, type = "response")
+test_predictions_m5 <- as.numeric(as.character(test_predictions_m5)) # convert to numeric to calculate ROC
+
+# Calculate AUC for model 5 for train set
+train_roc_m5 <- roc(train_merge_ds$TARGET, train_predictions_m5)
+train_auc_m5 <- auc(train_roc_m5)
+print(paste("AUC for train set:", train_auc_m5)) # AUC = 1.00
+
+# Calculate AUC for model 5 for test set
+test_roc_m5 <- roc(validation_merge_ds$TARGET, test_predictions_m5)
+test_auc_m5 <- auc(test_roc_m5)
+print(paste("AUC for test set:", test_auc_m5)) # AUC = 0.61
+
+# Train Random Forest model 6
+model6 <- randomForest(TARGET ~ EXT_SOURCE_3 + EXT_SOURCE_2 + DAYS_BIRTH + DAYS_CREDIT_UPDATE + DAYS_CREDIT + DAYS_ENDDATE_FACT + AMT_CREDIT + AMT_GOODS_PRICE + AMT_ANNUITY.x + AMT_INCOME_TOTAL + DAYS_CREDIT_ENDDATE + DAYS_ID_PUBLISH + CODE_GENDER + DAYS_EMPLOYED + CREDIT_TYPE + OWN_CAR_BIN + NAME_INCOME_TYPE + AMT_CREDIT_SUM + STATUS + EXT_SOURCE_1, data = train_merge_ds,
+                   	ntree = 500,
+                   	importance = TRUE)
+
+# Evaluate model 6
+# Make predictions for model 6 on the train set
+train_predictions_m6 <- predict(model6, newdata = train_merge_ds, type = "response")
+train_predictions_m6 <- as.numeric(as.character(train_predictions_m6)) # convert to numeric to calculate ROC
+
+# Make predictions for model 6 on the test set
+test_predictions_m6 <- predict(model6, newdata = validation_merge_ds, type = "response")
+test_predictions_m6 <- as.numeric(as.character(test_predictions_m6)) # convert to numeric to calculate ROC
+
+# Calculate AUC for model 6 for train set
+train_roc_m6 <- roc(train_merge_ds$TARGET, train_predictions_m6)
+train_auc_m6 <- auc(train_roc_m6)
+print(paste("AUC for train set:", train_auc_m6)) # AUC = 1.00
+
+# Calculate AUC for model 6 for test set
+test_roc_m6 <- roc(validation_merge_ds$TARGET, test_predictions_m6)
+test_auc_m6 <- auc(test_roc_m6)
+print(paste("AUC for test set:", test_auc_m6)) # AUC = 0.61
+```
+
