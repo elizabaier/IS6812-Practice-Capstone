@@ -1,0 +1,138 @@
+---
+title: "Business Results Calculations"
+author: "Eliza Baier"
+date: "2025-04-05"
+output: html_document
+---
+
+## Load Libraries 
+
+```{r}
+# Load libraries
+library(rminer)
+library(tidyverse)
+```
+
+
+## Business Implications Calculations
+
+```{r}
+# Calculate number of individuals with insufficient credit history
+merge |>
+  filter((EXT_SOURCE_1 == 0) + (EXT_SOURCE_2 == 0) + (EXT_SOURCE_3 == 0) >= 2) |>
+  count()
+
+# Calculate total individuals in dataset
+merge |>
+  count()
+
+# Calculate percentage of dataset 
+(36909/307511) * 100
+```
+
+## Split Test/Train
+
+```{r}
+# Split into train/test sets (80/20)
+inTrain <- createDataPartition(y = application_train$TARGET, p = 0.80, list = FALSE)
+
+# Split data into train and test
+set.seed(123)
+train_target <- application_train[inTrain,2]
+test_target <- application_train[-inTrain,2]
+train_input <- application_train[inTrain,-2]
+test_input <- application_train[-inTrain,-2]
+
+# Check target variable
+train_target |>
+  head()
+```
+
+### Train the Baseline GLM model
+
+```{r, include = FALSE}
+# Record start time
+start_time <- Sys.time()
+
+# Ensure it's a vector, not a list
+train_target <- unlist(train_target)
+
+# Fit logistic regression model
+baseline_model <- glm(train_target ~ ., data = train_input, family = binomial)
+
+# Summary of the model (optional)
+summary(baseline_model)
+
+# Predict probabilities on the test set
+pred_probs <- predict(baseline_model, newdata = test_input, type = "response")
+
+# Convert probabilities to class labels (using 0.5 threshold)
+pred_labels <- ifelse(pred_probs > 0.5, 1, 0)
+
+levels <- c(0, 1)
+pred_labels <- factor(pred_labels, levels = levels)
+test_target <- factor(test_target, levels = levels)
+
+# Unlist test_target to make sure it's a vector
+test_target <- unlist(test_target)
+
+# Evaluate model performance
+conf_matrix <- confusionMatrix(factor(pred_labels), factor(test_target))
+print(conf_matrix)
+
+# Record end time
+end_time <- Sys.time()
+```
+
+
+```{r, echo = FALSE}
+# Calculate and print the runtime
+runtime <- end_time - start_time
+cat("Model training runtime:", runtime, "\n")
+```
+
+### Evaluate baseline model (In Sample)
+
+```{r, echo = FALSE, warning=FALSE, message=FALSE}
+# AUC for in-sample data
+train_pred_probs_base <- predict(baseline_model, train_data_base)
+train_roc_base <- roc(train_labels_base, train_pred_probs_base)
+train_auc_base <- auc(train_roc_base)
+cat("AUC for training data:", round(train_auc_base, 2), "\n")
+```
+
+### Evaluate baseline model (Out of Sample)
+
+```{r, echo = FALSE, warning=FALSE, message=FALSE}
+# AUC for out-of-sample data
+test_pred_probs_base <- predict(baseline_model, test_data_base)
+test_roc_base <- roc(test_labels_base, test_pred_probs_base)
+test_auc_base <- auc(test_roc_base)
+cat("AUC for test data:", round(test_auc_base, 2), "\n")
+
+# Plot ROC Curve
+plot(test_roc_base, main = "ROC Curve for Test Data", col = "blue", lwd = 2)
+```
+
+```{r}
+# Predict probabilities on the test set
+pred_probs_gb <- predict(xgb_model, newdata = test_matrix, type = "response")
+
+# Convert probabilities to class labels (using 0.5 threshold)
+pred_labels_gb <- ifelse(pred_probs_gb > 0.5, 1, 0)
+
+levels <- c(0, 1)
+pred_labels_gb <- factor(pred_labels_gb, levels = levels)
+test_target_gb <- factor(test_labels, levels = levels)
+
+# Evaluate model performance
+conf_matrix_gb <- confusionMatrix(factor(pred_labels_gb), factor(test_target_gb))
+print(conf_matrix_gb)
+
+# Create vector for model metrics
+metric <- c("ACC", "F1", "PRECISION", "TPR")
+
+# Evaluate model metrics
+mmetric(test_target_gb, pred_labels_gb, metric)
+```
+
