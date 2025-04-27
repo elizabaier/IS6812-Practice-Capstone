@@ -1,5 +1,5 @@
 # IS6812-Practice-Capstone
-MSBA Practice Capstone Spring 2025 - Home Credit Default Risk
+MSBA Practice Capstone Spring 2025 - Home Credit Default Risk Kaggle Competition
 
 ## Business Problem
 Unbanked individuals struggle to get loans from trustworthy lenders which prevents them from owning property and establishing credit history. To properly serve this population, Home Credit needs to be able to predict their potential clients’ risk of defaulting. Accurately predicting the risk associated with each client will allow Home Credit to effectively serve an underserved population while increasing revenue and minimizing risk. 
