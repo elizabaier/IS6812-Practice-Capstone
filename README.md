@@ -18,3 +18,6 @@ Our model will foster growth for Home Credit and allow them to safely extend loa
 
 ## Conclusion
 This project provided valuable experience in dealing with important real world problems, highly dimensional data, large numbers of missing values, and different modeling methods that had not yet been covered in my coursework. In particular, I was able to build RandomForest models for the first time which led to a greater appreciation for the power of black box modeling, decision trees, and the importance of hyperparameter tuning. This project also provided valuable professional group work experience as my group worked together to overcome the issues we encountered throughout the project. Overall, this project provided me with important learning experiences and improved my understanding of start to finish data analysis and the professional skills required to interpret and communicate actionable business insights. 
+
+## File Overview
+I have included both my individual notebooks as well as our final group modeling notebook and final presentation slide deck. Files labeled with my name were my individual work while files labeled with "_DataLAKE" are group notebooks that represent my group's combined efforts. 
